@@ -1,12 +1,10 @@
 # adb_wrapper.py
 import subprocess
-import shlex
 from typing import Tuple, List, Optional
 
 ADB = "adb"
 
 def run_adb_cmd(cmd: List[str], timeout: int = 20) -> Tuple[int, str, str]:
-    """Run adb command (list of args) and return (returncode, stdout, stderr)."""
     try:
         proc = subprocess.run([ADB] + cmd, capture_output=True, text=True, timeout=timeout)
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
@@ -36,16 +34,14 @@ def get_focused_activity() -> Optional[str]:
     rc, out, err = run_adb_cmd(["shell", "dumpsys", "activity", "activities"])
     if rc != 0:
         return None
-    # Look for mResumedActivity or mFocusedActivity
     for line in out.splitlines():
         if "mResumedActivity" in line or "mFocusedActivity" in line:
-            # crude extraction of package/activity
             parts = line.strip().split()
             for p in parts:
                 if "/" in p and "." in p:
                     return p.strip()
-    # fallback - try 'am' focused-activity
-    rc2, out2, _ = run_adb_cmd(["shell", "dumpsys", "window", "windows", "|", "grep", "mCurrentFocus"])
+    # Fallback (note: piping inside adb may require sh -c)
+    rc2, out2, _ = run_adb_cmd(["shell", "sh", "-c", "dumpsys window windows | grep mCurrentFocus"])
     if rc2 == 0 and out2:
         return out2.strip()
     return None
@@ -64,16 +60,25 @@ def key_back() -> Tuple[bool, str]:
     return rc == 0, err or out
 
 def am_start(component: str) -> Tuple[bool, str]:
-    # component example: "com.example.app/.MainActivity"
+    # component: "com.example/.MainActivity" or "com.example/com.example.MainActivity"
     rc, out, err = run_adb_cmd(["shell", "am", "start", "-n", component])
-    return rc == 0, err or out
+    return rc == 0, err or out or out
+
+def _escape_text_for_input(text: str) -> str:
+    # input text uses %s for spaces, and many chars need escaping.
+    # Basic safe escaping:
+    escaped = []
+    for ch in text:
+        if ch == " ":
+            escaped.append("%s")
+        elif ch in ["&", "<", ">", "(", ")", "|", ";", "'", "\"", "\\", "$", "`"]:
+            # Replace with space to avoid shell and IME problems; for real robustness use Clipboard+paste or IME
+            escaped.append(" ")
+        else:
+            escaped.append(ch)
+    return "".join(escaped)
 
 def input_text(text: str) -> Tuple[bool, str]:
-    """
-    Use adb input text. Spaces must be replaced with %s.
-    Basic escaping: replace space with %s and escape single quotes.
-    """
-    esc = text.replace("%", "%25").replace(" ", "%s")
-    # adb input text expects arguments without quoting in many shells
-    rc, out, err = run_adb_cmd(["shell", "input", "text", esc])
+    safe = _escape_text_for_input(text)
+    rc, out, err = run_adb_cmd(["shell", "input", "text", safe])
     return rc == 0, err or out

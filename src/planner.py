@@ -1,142 +1,145 @@
 # planner.py
-import json
-import os
-from typing import Any, Dict, Optional, List, Tuple
-from selector_resolver import resolve_selector
+"""
+Deterministic planner for Day 2:
+- Emits one atomic action following a constrained JSON schema
+- Validates with JSON schema
+- Uses a rule-based approach guided by a target config (no hosted LLM required)
+Config structure (see target_config/flipkart_like.json):
+{
+  "app_component": "com.example/.MainActivity",
+  "package": "com.example",
+  "termination": { "must_contain_text": "Payment", "activity": ".CheckoutActivity" },
+  "plan_hints": [
+    {
+      "when_goal_contains_any": ["search", "find"],
+      "prefer": [{"by": "resource-id", "value": "com.example:id/search_src_text"},
+                 {"by": "text", "value": "Search"}],
+      "action": "tap"
+    },
+    {
+      "when_goal_regex": "search for (.+)",
+      "action": "type",
+      "target_prefer": [{"by": "resource-id", "value": "com.example:id/search_src_text"}],
+      "args_from_regex_group": {"text": 1}
+    },
+    {
+      "when_goal_contains_any": ["add to cart", "add"],
+      "prefer": [{"by": "text", "value": "ADD TO CART"}, {"by": "text", "value": "Add to cart"}],
+      "action": "tap"
+    },
+    {
+      "when_goal_contains_any": ["checkout", "payment"],
+      "prefer": [{"by": "text", "value": "Buy Now"}, {"by": "text", "value": "Payment"}],
+      "action": "tap"
+    }
+  ],
+  "fallback_scroll_if_not_found": true
+}
+"""
+import re
+from typing import Dict, Any, Optional, List, Tuple
+from jsonschema import validate, Draft7Validator
 
-# Minimal JSON-schema validator to avoid heavy deps.
 ACTION_SCHEMA = {
-    "action_enum": {"tap", "type", "swipe", "back", "scroll", "open_app", "wait"},
-    "by_enum": {"resource-id", "text", "content-desc", "bounds", "element_id"},
+    "type": "object",
+    "properties": {
+        "action": {"type": "string", "enum": ["tap", "type", "swipe", "back", "scroll", "open_app", "wait"]},
+        "target": {
+            "type": "object",
+            "properties": {
+                "by": {"type": "string", "enum": ["resource-id", "text", "content-desc", "bounds", "element_id"]},
+                "value": {"type": "string"}
+            },
+            "required": ["by", "value"]
+        },
+        "args": {"type": "object"}
+    },
+    "required": ["action"],
+    "additionalProperties": True
 }
 
-def _is_action_dict(d: Dict[str, Any]) -> Tuple[bool, str]:
-    if not isinstance(d, dict):
-        return False, "planner output is not an object"
-    if "action" not in d:
-        return False, "missing action"
-    if d["action"] not in ACTION_SCHEMA["action_enum"]:
-        return False, f"invalid action {d['action']}"
-    if d["action"] not in ["back", "wait"] and "target" not in d:
-        return False, "missing target for non-back/non-wait action"
-    if "target" in d:
-        tgt = d["target"]
-        if not isinstance(tgt, dict):
-            return False, "target must be an object"
-        if "by" not in tgt or "value" not in tgt:
-            return False, "target missing by/value"
-        if tgt["by"] not in ACTION_SCHEMA["by_enum"]:
-            return False, f"invalid target.by {tgt['by']}"
-        if not isinstance(tgt["value"], str):
-            return False, "target.value must be string"
-    if "args" in d and not isinstance(d["args"], dict):
-        return False, "args must be object"
-    if "args" in d and "duration_ms" in d["args"]:
+def _find_first_present(state_norm: Dict, candidates: List[Dict]) -> Optional[Dict]:
+    from actuator import find_by_selector
+    for sel in candidates:
+        el = find_by_selector(state_norm, sel.get("by"), sel.get("value"))
+        if el:
+            return sel
+    return None
+
+def _goal_contains_any(goal: str, words: List[str]) -> bool:
+    g = goal.lower()
+    return any(w.lower() in g for w in words)
+
+def _goal_regex(goal: str, pattern: str) -> Optional[re.Match]:
+    return re.search(pattern, goal, flags=re.IGNORECASE)
+
+def _validate_action(action: Dict) -> Dict:
+    v = Draft7Validator(ACTION_SCHEMA)
+    errs = sorted(v.iter_errors(action), key=lambda e: e.path)
+    if errs:
+        raise ValueError("Planner produced invalid action: " + "; ".join([e.message for e in errs]))
+    return action
+
+def _need_open_app(obs: Dict, cfg: Dict) -> Optional[Dict]:
+    comp = cfg.get("app_component")
+    pkg = cfg.get("package")
+    act = obs.get("package_activity") or ""
+    if comp and comp.split("/")[0] not in act:
+        return {"action": "open_app", "target": {"by": "component", "value": comp}, "args": {}}
+    if pkg and pkg not in act:
+        # If only package given, still open the app component if provided
+        comp = cfg.get("app_component") or ""
+        if comp:
+            return {"action": "open_app", "target": {"by": "component", "value": comp}, "args": {}}
+    return None
+
+def plan_next_action(goal: str, obs: Dict, state_norm: Dict, cfg: Dict, history: List[Dict]) -> Dict:
+    # 1) Ensure app is open
+    act = _need_open_app(obs, cfg)
+    if act:
+        return _validate_action(act)
+
+    # 2) Try explicit plan hints
+    for hint in cfg.get("plan_hints", []):
+        if "when_goal_contains_any" in hint:
+            if not _goal_contains_any(goal, hint["when_goal_contains_any"]):
+                continue
+        if "when_goal_regex" in hint:
+            m = _goal_regex(goal, hint["when_goal_regex"])
+            if not m:
+                continue
+        action = hint.get("action")
+        target = None
+
+        # Find target on screen if specified
+        prefer = hint.get("prefer") or hint.get("target_prefer") or []
+        if prefer:
+            sel = _find_first_present(state_norm, prefer)
+            if sel:
+                target = sel
+
+        args = {}
+        if "args_from_regex_group" in hint and "when_goal_regex" in hint:
+            m = _goal_regex(goal, hint["when_goal_regex"])
+            if m:
+                for k, grp_idx in hint["args_from_regex_group"].items():
+                    args[k] = m.group(int(grp_idx))
+
+        # If action is 'type' but no explicit text and history shows last action was tap on input, skip args – caller should supply per config, but we try to use regex above.
+        act_obj = {"action": action}
+        if target:
+            act_obj["target"] = target
+        if args:
+            act_obj["args"] = args
+
         try:
-            ms = int(d["args"]["duration_ms"])
-            if ms < 0:
-                return False, "duration_ms must be >= 0"
+            return _validate_action(act_obj)
         except Exception:
-            return False, "duration_ms must be integer"
-    return True, ""
+            continue
 
-def validate_action_schema(d: Dict[str, Any]) -> Dict[str, Any]:
-    ok, err = _is_action_dict(d)
-    if not ok:
-        raise ValueError(f"Planner action invalid: {err}")
-    return d
+    # 3) Fallback: if not found and allowed, scroll to reveal
+    if cfg.get("fallback_scroll_if_not_found", True):
+        return _validate_action({"action": "scroll", "args": {"direction": "down", "duration_ms": 400}})
 
-def _contains(text: Optional[str], needle: str) -> bool:
-    if not text:
-        return False
-    return needle.lower() in text.lower()
-
-def _find_any_text(state_norm: Dict[str, Any], texts: List[str]) -> Optional[Dict[str, Any]]:
-    for e in state_norm.get("elements", []):
-        for t in texts:
-            if _contains(e.get("text"), t) or _contains(e.get("content_desc"), t):
-                return e
-    return None
-
-def plan_action_rules(goal: str, state_norm: Dict[str, Any], target_conf: Dict[str, Any]) -> Dict[str, Any]:
-    # 1) If goal implies opening target app and we are not in it, plan open_app
-    launch_comp = target_conf.get("launch_component")
-    package_hint = target_conf.get("package_hint")
-    # The loop runner handles checking actual focused activity; here we only use hint if present.
-    if launch_comp and package_hint:
-        # If no element is found and we have a launch component, consider opening app first.
-        # This is a heuristic: first step in a session usually needs opening the app.
-        # The loop runner can short-circuit if already in the right package via termination checks.
-        return validate_action_schema({
-            "action": "open_app",
-            "target": {"by": "text", "value": launch_comp},
-            "args": {},
-            "reason": "Open target app"
-        })
-
-    # 2) If the goal implies typing (search/query words), prefer configured selector
-    synonyms = target_conf.get("synonyms", {})
-    selectors = target_conf.get("selectors", {})
-    intents_search = set([w for w in synonyms.get("search", [])])
-    goal_l = goal.lower()
-    if any(w in goal_l for w in intents_search) and "search_field" in selectors:
-        sel = selectors["search_field"]
-        return validate_action_schema({
-            "action": "type",
-            "target": {"by": sel.get("by", "resource-id"), "value": sel.get("value", "")},
-            "args": {"text": goal},  # naive: type the whole goal; caller may trim in config
-            "reason": "Type into search field"
-        })
-
-    # 3) If any visible label matches a key term from goal, tap it
-    goal_terms = goal_l.split()
-    candidate = None
-    best_len = 0
-    for e in state_norm.get("elements", []):
-        txt = (e.get("text") or "") + " " + (e.get("content_desc") or "")
-        tl = txt.lower()
-        for term in goal_terms:
-            if term and term in tl and len(term) > best_len:
-                candidate = e
-                best_len = len(term)
-    if candidate:
-        return validate_action_schema({
-            "action": "tap",
-            "target": {"by": "element_id", "value": candidate.get("element_id", "")},
-            "args": {},
-            "reason": "Tap best-matching visible text"
-        })
-
-    # 4) Fallback: scroll to discover more items
-    return validate_action_schema({
-        "action": "scroll",
-        "target": {"by": "bounds", "value": "auto"},  # loop will compute coords
-        "args": {"duration_ms": target_conf.get("scroll_defaults", {}).get("duration_ms", 300)},
-        "reason": "Scroll to reveal target"
-    })
-
-def _try_llm_plan(_goal: str, _state: Dict[str, Any], _schema_json: str) -> Optional[Dict[str, Any]]:
-    # Placeholder; avoid external deps. Return None to fall back to rules.
-    # If you add an LLM, ensure it strictly returns a JSON object and validate via validate_action_schema.
-    return None
-
-def plan_action_auto(goal: str, state_norm: Dict[str, Any], target_conf: Dict[str, Any], mode: str = "auto") -> Dict[str, Any]:
-    schema_json = json.dumps({
-        "action": "tap|type|swipe|back|scroll|open_app|wait",
-        "target": {"by": "resource-id|text|content-desc|bounds|element_id", "value": "<string-or-bounds>"},
-        "args": {"text": "...", "duration_ms": 300},
-        "reason": "short explanation"
-    })
-    mode = (mode or "auto").lower()
-    if mode == "llm":
-        out = _try_llm_plan(goal, state_norm, schema_json)
-        if out:
-            return validate_action_schema(out)
-        return plan_action_rules(goal, state_norm, target_conf)
-    if mode == "rules":
-        return plan_action_rules(goal, state_norm, target_conf)
-    # auto: try llm then rules
-    out = _try_llm_plan(goal, state_norm, schema_json)
-    if out:
-        return validate_action_schema(out)
-    return plan_action_rules(goal, state_norm, target_conf)
+    # 4) As a last resort, wait a bit
+    return _validate_action({"action": "wait", "args": {"duration_ms": 500}})

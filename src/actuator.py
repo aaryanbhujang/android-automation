@@ -1,15 +1,13 @@
 # actuator.py
 from typing import Dict, Tuple, Optional, List
 from adb_wrapper import input_tap, input_text, input_swipe, key_back, am_start
-from normalizer import sha1_of
-import time
+from math import floor
 
-def centroid_from_element(element: Dict) -> Tuple[int,int]:
-    return tuple(element.get("center", [0,0]))
+def centroid_from_element(element: Dict) -> Tuple[int, int]:
+    return tuple(element.get("center", [0, 0]))
 
 def find_by_selector(state_norm: Dict, by: str, value: str) -> Optional[Dict]:
     elems = state_norm.get("elements", [])
-    # resource-id exact match
     if by == "resource-id":
         for e in elems:
             if e.get("resource_id") == value:
@@ -17,20 +15,22 @@ def find_by_selector(state_norm: Dict, by: str, value: str) -> Optional[Dict]:
     if by == "element_id":
         return state_norm.get("by_id", {}).get(value)
     if by == "text":
+        # exact first, then contains
         for e in elems:
-            if e.get("text") and e.get("text").strip() == value.strip():
+            if (e.get("text") or "").strip() == (value or "").strip():
+                return e
+        for e in elems:
+            if value and value.strip().lower() in (e.get("text") or "").strip().lower():
                 return e
     if by == "content-desc":
         for e in elems:
             if e.get("content_desc") == value:
                 return e
-    # bounds expected as "[l,t][r,b]" or "l,t,r,b" or JSON list
     if by == "bounds":
         try:
             import ast
             if value.strip().startswith("["):
                 b = ast.literal_eval(value)
-                # find element whose bounds equal
                 for e in elems:
                     if e.get("bounds") == b:
                         return e
@@ -38,101 +38,118 @@ def find_by_selector(state_norm: Dict, by: str, value: str) -> Optional[Dict]:
             pass
     return None
 
+def _resolve_tap_target(target: Dict, state_norm: Dict) -> Tuple[int, int]:
+    if target:
+        elem = find_by_selector(state_norm, target.get("by"), target.get("value"))
+        if elem:
+            return centroid_from_element(elem)
+        # Allow raw "x,y"
+        try:
+            coords = target.get("value")
+            if isinstance(coords, str) and "," in coords:
+                px, py = coords.split(",", 1)
+                return int(px), int(py)
+        except Exception:
+            pass
+    return 0, 0
+
+def _screen_center(state_norm: Dict) -> Tuple[int, int]:
+    # UiAutomator dump doesn't provide screen size; approximate from max bounds
+    max_r = 0
+    max_b = 0
+    for e in state_norm.get("elements", []):
+        b = e.get("bounds") or [0, 0, 0, 0]
+        max_r = max(max_r, b[2])
+        max_b = max(max_b, b[3])
+    return max_r // 2, max_b // 2
+
 def exec_action(action: Dict, state_norm: Dict) -> Dict:
     """
-    action: {"action":"tap"|"type"|"swipe"|"back"|"open_app"|"wait"|"scroll",
-             "target":{"by":"resource-id"|"text"|"element_id"|"bounds"|"content-desc", "value":"..."},
-             "args": {"text": "...", "duration_ms": 300}
-            }
-    Returns execution report.
+    action:
+      {
+        "action": "tap|type|swipe|back|scroll|open_app|wait",
+        "target": {"by": "resource-id|text|content-desc|bounds|element_id", "value": "<...>"},
+        "args": {"text": "...", "duration_ms": 300, "direction": "down|up|left|right"}
+      }
+    Returns: {"success": bool, "adb_cmds": [str], "note": str}
     """
     act = action.get("action")
-    target = action.get("target", {})
+    target = action.get("target", {}) or {}
     args = action.get("args", {}) or {}
-    adb_cmds = []
+    adb_cmds: List[str] = []
     result = {"success": False, "adb_cmds": [], "note": ""}
 
     if act == "open_app":
         comp = target.get("value")
         ok, out = am_start(comp)
         adb_cmds.append(f"am start -n {comp}")
-        result["success"] = ok
-        result["note"] = out
-        result["adb_cmds"] = adb_cmds
+        result.update({"success": ok, "note": out, "adb_cmds": adb_cmds})
         return result
 
     if act == "back":
         ok, out = key_back()
         adb_cmds.append("input keyevent KEYCODE_BACK")
-        result["success"] = ok
-        result["note"] = out
-        result["adb_cmds"] = adb_cmds
+        result.update({"success": ok, "note": out, "adb_cmds": adb_cmds})
         return result
 
     if act == "wait":
-        dur = int(args.get("duration_ms", 500))
-        time.sleep(dur/1000.0)
-        result["success"] = True
-        result["note"] = f"waited {dur}ms"
-        result["adb_cmds"] = ["sleep " + str(dur)]
+        import time
+        dur_ms = int(args.get("duration_ms", 500))
+        time.sleep(dur_ms / 1000.0)
+        result.update({"success": True, "note": f"waited {dur_ms}ms", "adb_cmds": ["(sleep)"]})
         return result
 
-    if act in ("tap", "type"):
-        # resolve element
-        if target:
-            elem = find_by_selector(state_norm, target.get("by"), target.get("value"))
-            if elem:
-                x, y = centroid_from_element(elem)
-            else:
-                # if target value might be raw "x,y" coords
-                try:
-                    coords = target.get("value")
-                    if isinstance(coords, str) and "," in coords:
-                        parts = coords.split(",")
-                        x, y = int(parts[0]), int(parts[1])
-                    else:
-                        x, y = 0, 0
-                except Exception:
-                    x, y = 0, 0
-        else:
-            x, y = 0, 0
+    if act == "tap":
+        x, y = _resolve_tap_target(target, state_norm)
+        ok, out = input_tap(x, y)
+        adb_cmds.append(f"input tap {x} {y}")
+        result.update({"success": ok, "note": out, "adb_cmds": adb_cmds})
+        return result
 
-        if act == "tap":
-            ok, out = input_tap(x, y)
+    if act == "type":
+        # Tap target first if provided
+        x, y = _resolve_tap_target(target, state_norm)
+        if (x, y) != (0, 0):
+            ok_tap, out_tap = input_tap(x, y)
             adb_cmds.append(f"input tap {x} {y}")
-            result["success"] = ok
-            result["note"] = out
-            result["adb_cmds"] = adb_cmds
-            return result
+            if not ok_tap:
+                result.update({"success": False, "note": f"tap-before-type failed: {out_tap}", "adb_cmds": adb_cmds})
+                return result
+        text = args.get("text", "")
+        ok, out = input_text(text)
+        adb_cmds.append(f"input text <{len(text)} chars>")
+        result.update({"success": ok, "note": out, "adb_cmds": adb_cmds})
+        return result
 
-        if act == "type":
-            text = args.get("text", "")
-            # Focus the field by tapping if coords available
-            if x and y:
-                input_tap(x, y)
-                adb_cmds.append(f"input tap {x} {y}")
-            ok, out = input_text(text)
-            adb_cmds.append(f"input text {text}")
-            result["success"] = ok
-            result["note"] = out
-            result["adb_cmds"] = adb_cmds
-            return result
+    if act == "swipe":
+        x1 = int(args.get("x1", 0)); y1 = int(args.get("y1", 0))
+        x2 = int(args.get("x2", 0)); y2 = int(args.get("y2", 0))
+        dur = int(args.get("duration_ms", 300))
+        ok, out = input_swipe(x1, y1, x2, y2, dur)
+        adb_cmds.append(f"input swipe {x1} {y1} {x2} {y2} {dur}")
+        result.update({"success": ok, "note": out, "adb_cmds": adb_cmds})
+        return result
 
-    if act in ("swipe", "scroll"):
-        dur = args.get("duration_ms", 300)
-        tv = target.get("value")
-        # expect target.value to be "x1,y1,x2,y2"
-        try:
-            x1,y1,x2,y2 = map(int, tv.split(","))
-            ok, out = input_swipe(x1,y1,x2,y2,dur)
-            adb_cmds.append(f"input swipe {x1} {y1} {x2} {y2} {dur}")
-            result["success"] = ok
-            result["note"] = out
-            result["adb_cmds"] = adb_cmds
-            return result
-        except Exception as e:
-            result["note"] = f"{act} parse error: {e}"
-            return result
+    if act == "scroll":
+        # direction-based swipe from screen center
+        cx, cy = _screen_center(state_norm)
+        length = int(args.get("length", max(cy, cx) // 2 or 400))
+        dur = int(args.get("duration_ms", 400))
+        direction = (args.get("direction") or "down").lower()
+        dx, dy = 0, 0
+        if direction == "down":
+            dx, dy = 0, length
+        elif direction == "up":
+            dx, dy = 0, -length
+        elif direction == "left":
+            dx, dy = -length, 0
+        elif direction == "right":
+            dx, dy = length, 0
+        x1, y1, x2, y2 = cx, cy, cx + dx, cy + dy
+        ok, out = input_swipe(x1, y1, x2, y2, dur)
+        adb_cmds.append(f"input swipe {x1} {y1} {x2} {y2} {dur}")
+        result.update({"success": ok, "note": out, "adb_cmds": adb_cmds})
+        return result
 
-    result["note"] = f"unsupported action {act}"
+    result.update({"success": False, "note": f"unknown action {act}", "adb_cmds": adb_cmds})
     return result

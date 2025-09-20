@@ -1,72 +1,99 @@
-import argparse, json, time
+# run_goal.py
+import argparse
+import json
+import time
+from typing import Dict, Any, List
+
 from observer import observe
 from normalizer import normalize
-from verifier import verify_and_retry
 from actuator import exec_action
-from planner import plan_action_auto
-from adb_wrapper import get_focused_activity
+from verifier import verify_and_retry
+from planner import plan_next_action
+from logger import RunLogger
 
-def load_json(path):
-    with open(path, "r") as f:
-        return json.load(f)
+def goal_satisfied(obs: Dict, state_norm: Dict, termination: Dict) -> bool:
+    ok = True
+    if not termination:
+        return False
+    if "must_contain_text" in termination:
+        needle = termination["must_contain_text"].strip().lower()
+        ok = ok and any(needle in (e.get("text") or "").strip().lower() for e in state_norm.get("elements", []))
+    if "activity" in termination:
+        act = obs.get("package_activity") or ""
+        ok = ok and (termination["activity"] in act)
+    if "package" in termination:
+        act = obs.get("package_activity") or ""
+        ok = ok and (termination["package"] in act)
+    return ok
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--goal", required=True)
-    ap.add_argument("--target", required=True)
-    ap.add_argument("--max_steps", type=int, default=10)
-    ap.add_argument("--timeout_s", type=int, default=60)
-    ap.add_argument("--planner", choices=["rules","auto","llm"], default="rules")
-    ap.add_argument("--verify_each", action="store_true")
+    ap = argparse.ArgumentParser(description="Day 2 NL-goal runner (Observe → Plan → Act → Verify loop)")
+    ap.add_argument("--goal", required=True, help='Natural language goal, e.g. "Add a MacBook Pro to the cart and go to the payment page"')
+    ap.add_argument("--config", required=True, help="Target config JSON path")
+    ap.add_argument("--max-steps", type=int, default=20)
+    ap.add_argument("--verify-retries", type=int, default=3)
     args = ap.parse_args()
 
-    target_conf = load_json(args.target)
-    deadline = time.time() + args.timeout_s
+    with open(args.config, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
 
-    for step in range(1, args.max_steps + 1):
-        # 1) Observe and normalize
-        obs = observe()  # make sure observe() includes package_activity or add it below
-        if not obs.get("package_activity"):
-            pa = get_focused_activity()
-            if pa:
-                obs["package_activity"] = pa
+    logger = RunLogger()
+    history: List[Dict[str, Any]] = []
+    try:
+        start_ts = int(time.time() * 1000)
+        for step in range(1, args.max_steps + 1):
+            # Observe
+            obs = observe()
+            state_norm = normalize(obs["raw_xml"])
+            logger.log({"ts": obs["ts"], "step": "observe", "obs_meta": {"activity": obs.get("package_activity")}, "normalized_count": len(state_norm["elements"])})
 
-        state_norm = normalize(obs)
+            # Termination?
+            if goal_satisfied(obs, state_norm, cfg.get("termination", {})):
+                logger.log({"ts": int(time.time() * 1000), "step": "done", "reason": "termination satisfied", "goal": args.goal})
+                print("SUCCESS: Goal satisfied.")
+                return
 
-        # 2) Termination check (example: you might already be done)
-        term = target_conf.get("termination", {})
-        pa = obs.get("package_activity", "")
-        act_ok = (term.get("activity_substring") in pa) if term.get("activity_substring") else True
-        any_texts = term.get("any_of_texts") or []
-        any_ok = any(t in (state_norm.get("all_text","") or "") for t in any_texts) if any_texts else False
-        print(f"[OBS] step={step} package_activity={pa} pkg_hint={target_conf.get('package_hint')}")
-        if act_ok and any_ok:
-            print(f"[TERM] ok=True; detail=activity~={term.get('activity_substring')} any_of_texts={any_texts}")
-            return 0
+            # Plan
+            try:
+                plan = plan_next_action(args.goal, obs, state_norm, cfg, history)
+            except Exception as e:
+                logger.log({"ts": int(time.time() * 1000), "step": "plan_error", "error": str(e)})
+                print("FAILURE: Planner error:", str(e))
+                exit(3)
 
-        # 3) Plan (pass obs so 'launch once' guard works)
-        plan = plan_action_auto(args.goal, state_norm, target_conf, mode=args.planner, obs=obs)
-        print(f"[STEP {step}] Plan: {plan}")
+            logger.log({"ts": int(time.time() * 1000), "step": "plan", "plan": plan})
 
-        # 4) Execute
-        exec_res = exec_action(plan)
-        print(f"[STEP {step}] Exec: {exec_res}")
-        if not exec_res.get("success"):
-            print("[WARN] exec failed; trying to recover with back")
-            exec_action({"action":"back","target":{},"args":{}})
+            # Act
+            exec_report = exec_action(plan, state_norm)
+            logger.log({"ts": int(time.time() * 1000), "step": "act", "action": plan, "exec_report": exec_report})
 
-        # 5) Optional verification per step
-        if args.verify_each:
-            verify_and_retry(plan, state_norm)
+            if not exec_report.get("success"):
+                logger.log({"ts": int(time.time() * 1000), "step": "act_failure", "note": exec_report.get("note")})
+                print("FAILURE: Action execution failed:", exec_report.get("note"))
+                exit(4)
 
-        if time.time() > deadline:
-            print("[TIMEOUT] Exiting")
-            break
+            # Verify (derive minimal expectations from config or from plan)
+            expect = {}
+            # Heuristic: after open_app, expect activity/package; after tap/type, expect text from plan args (if any)
+            if plan.get("action") == "open_app" and cfg.get("package"):
+                expect["activity"] = cfg.get("package")
+            # Allow optional expected text hints per config
+            if cfg.get("verify_after_action_text"):
+                expect["must_contain_text"] = cfg["verify_after_action_text"]
 
-        # small pause between steps to allow UI to settle
-        time.sleep(0.5)
+            verify_report = verify_and_retry(plan, expect or None, max_retries=args.verify_retries)
+            logger.log({"ts": int(time.time() * 1000), "step": "verify", "verify_report": {"ok": verify_report["ok"], "attempts": verify_report["attempts"]}})
 
-    return 1
+            history.append({"obs": obs, "plan": plan, "exec": exec_report, "verify": verify_report})
+            # Small pacing
+            time.sleep(0.25)
+
+        # If loop exits without termination
+        logger.log({"ts": int(time.time() * 1000), "step": "fail_termination", "goal": args.goal})
+        print("FAILURE: Max steps exceeded without satisfying goal.")
+        exit(5)
+    finally:
+        logger.close()
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
