@@ -2,6 +2,7 @@
 from typing import Dict, Tuple, Optional, List
 from adb_wrapper import input_tap, input_text, input_swipe, key_back, am_start
 from normalizer import sha1_of
+import time
 
 def centroid_from_element(element: Dict) -> Tuple[int,int]:
     return tuple(element.get("center", [0,0]))
@@ -39,7 +40,7 @@ def find_by_selector(state_norm: Dict, by: str, value: str) -> Optional[Dict]:
 
 def exec_action(action: Dict, state_norm: Dict) -> Dict:
     """
-    action: {"action":"tap"|"type"|"swipe"|"back"|"open_app",
+    action: {"action":"tap"|"type"|"swipe"|"back"|"open_app"|"wait"|"scroll",
              "target":{"by":"resource-id"|"text"|"element_id"|"bounds"|"content-desc", "value":"..."},
              "args": {"text": "...", "duration_ms": 300}
             }
@@ -66,6 +67,14 @@ def exec_action(action: Dict, state_norm: Dict) -> Dict:
         result["success"] = ok
         result["note"] = out
         result["adb_cmds"] = adb_cmds
+        return result
+
+    if act == "wait":
+        dur = int(args.get("duration_ms", 500))
+        time.sleep(dur/1000.0)
+        result["success"] = True
+        result["note"] = f"waited {dur}ms"
+        result["adb_cmds"] = ["sleep " + str(dur)]
         return result
 
     if act in ("tap", "type"):
@@ -109,7 +118,7 @@ def exec_action(action: Dict, state_norm: Dict) -> Dict:
             result["adb_cmds"] = adb_cmds
             return result
 
-    if act == "swipe":
+    if act in ("swipe", "scroll"):
         dur = args.get("duration_ms", 300)
         tv = target.get("value")
         # expect target.value to be "x1,y1,x2,y2"
@@ -122,7 +131,7 @@ def exec_action(action: Dict, state_norm: Dict) -> Dict:
             result["adb_cmds"] = adb_cmds
             return result
         except Exception as e:
-            result["note"] = f"swipe parse error: {e}"
+            result["note"] = f"{act} parse error: {e}"
             return result
 
     result["note"] = f"unsupported action {act}"

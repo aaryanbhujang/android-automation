@@ -1,0 +1,13 @@
+{
+  "name": "Android Settings search demo",
+  "package_hint": "com.android.settings",
+  "launch_component": "com.android.settings/.homepage.SettingsHomepageActivity",
+  "selectors": {
+    "search_button": { "by": "content-desc", "value": "Search settings" },
+    "search_field":  { "by": "resource-id",   "value": "android:id/search_src_text" }
+  },
+  "termination": {
+    "activity_substring": "Settings",
+    "any_of_texts": ["Battery"]
+  }
+}
