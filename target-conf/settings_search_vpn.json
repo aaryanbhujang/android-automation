@@ -1,32 +1,15 @@
 {
   "app_component": "com.android.settings/.Settings",
   "package": "com.android.settings",
+  "allowed_packages": ["com.google.android.settings.intelligence"],
   "termination": {
-    "must_contain_text": "Gestures",
-    "package": "com.android.settings",
-    "activity": "SubSettings"
+    "must_contain_text": "VPN"
   },
   "plan_hints": [
     {
       "when_goal_contains_any": ["open settings", "settings"],
       "action": "open_app",
       "target": { "by": "component", "value": "com.android.settings/.Settings" }
-    },
-    {
-      "when_goal_contains_any": ["system", "open system"],
-      "prefer": [
-        { "by": "text", "value": "System" },
-        { "by": "content-desc", "value": "System" }
-      ],
-      "action": "tap"
-    },
-    {
-      "when_goal_contains_any": ["gestures", "gesture"],
-      "prefer": [
-        { "by": "text", "value": "Gestures" },
-        { "by": "content-desc", "value": "Gestures" }
-      ],
-      "action": "tap"
     },
     {
       "when_goal_contains_any": ["search"],
@@ -57,5 +40,5 @@
   ],
   "fallback_scroll_if_not_found": true,
   "fallback_scroll_args": { "direction": "down", "duration_ms": 600, "length_factor": 0.85 },
-  "verify_after_action_text": "Gestures"
+  "verify_after_action_text": "VPN"
 }

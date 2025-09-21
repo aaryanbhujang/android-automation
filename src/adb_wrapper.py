@@ -40,7 +40,7 @@ def get_focused_activity() -> Optional[str]:
             for p in parts:
                 if "/" in p and "." in p:
                     return p.strip()
-    # Fallback (note: piping inside adb may require sh -c)
+    # Fallback (note: piping inside adb requires sh -c)
     rc2, out2, _ = run_adb_cmd(["shell", "sh", "-c", "dumpsys window windows | grep mCurrentFocus"])
     if rc2 == 0 and out2:
         return out2.strip()
@@ -59,20 +59,26 @@ def key_back() -> Tuple[bool, str]:
     rc, out, err = run_adb_cmd(["shell", "input", "keyevent", "KEYCODE_BACK"])
     return rc == 0, err or out
 
+def input_keyevent(key: str) -> Tuple[bool, str]:
+    # key can be a numeric code or a KEYCODE_* name (e.g., ENTER)
+    key = key.strip().upper()
+    if not key.startswith("KEYCODE_"):
+        key = f"KEYCODE_{key}"
+    rc, out, err = run_adb_cmd(["shell", "input", "keyevent", key])
+    return rc == 0, err or out
+
 def am_start(component: str) -> Tuple[bool, str]:
     # component: "com.example/.MainActivity" or "com.example/com.example.MainActivity"
     rc, out, err = run_adb_cmd(["shell", "am", "start", "-n", component])
     return rc == 0, err or out or out
 
 def _escape_text_for_input(text: str) -> str:
-    # input text uses %s for spaces, and many chars need escaping.
-    # Basic safe escaping:
+    # Basic escaping for adb shell input text
     escaped = []
     for ch in text:
         if ch == " ":
             escaped.append("%s")
         elif ch in ["&", "<", ">", "(", ")", "|", ";", "'", "\"", "\\", "$", "`"]:
-            # Replace with space to avoid shell and IME problems; for real robustness use Clipboard+paste or IME
             escaped.append(" ")
         else:
             escaped.append(ch)
@@ -82,3 +88,6 @@ def input_text(text: str) -> Tuple[bool, str]:
     safe = _escape_text_for_input(text)
     rc, out, err = run_adb_cmd(["shell", "input", "text", safe])
     return rc == 0, err or out
+def am_start(component: str) -> Tuple[bool, str]:
+    rc, out, err = run_adb_cmd(["shell", "am", "start", "-n", component])
+    return rc == 0, (err or out)

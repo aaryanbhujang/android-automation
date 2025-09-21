@@ -74,12 +74,18 @@ def main():
 
             # Verify (derive minimal expectations from config or from plan)
             expect = {}
-            # Heuristic: after open_app, expect activity/package; after tap/type, expect text from plan args (if any)
+            # Heuristic: after open_app, expect activity/package
             if plan.get("action") == "open_app" and cfg.get("package"):
                 expect["activity"] = cfg.get("package")
-            # Allow optional expected text hints per config
-            if cfg.get("verify_after_action_text"):
+            # Only expect text after typing to avoid redundant checks causing loops
+            if plan.get("action") == "type" and cfg.get("verify_after_action_text"):
                 expect["must_contain_text"] = cfg["verify_after_action_text"]
+
+            # If typing a phone number, verify the "Send to <number>" suggestion appears exactly
+            if plan.get("action") == "type":
+                args_text = ((plan.get("args") or {}).get("text") or "").strip()
+                if args_text.isdigit() and len(args_text) >= 5:  # simple phone-like heuristic
+                    expect = {"must_equal_text": f"Send to {args_text}"}
 
             verify_report = verify_and_retry(plan, expect or None, max_retries=args.verify_retries)
             logger.log({"ts": int(time.time() * 1000), "step": "verify", "verify_report": {"ok": verify_report["ok"], "attempts": verify_report["attempts"]}})

@@ -43,11 +43,12 @@ from jsonschema import validate, Draft7Validator
 ACTION_SCHEMA = {
     "type": "object",
     "properties": {
-        "action": {"type": "string", "enum": ["tap", "type", "swipe", "back", "scroll", "open_app", "wait"]},
+        "action": {"type": "string", "enum": ["tap", "type", "swipe", "back", "scroll", "open_app", "wait", "keyevent"]},
         "target": {
             "type": "object",
             "properties": {
-                "by": {"type": "string", "enum": ["resource-id", "text", "content-desc", "bounds", "element_id"]},
+                # Allow "component" so open_app can validate cleanly
+                "by": {"type": "string", "enum": ["resource-id", "text", "content-desc", "bounds", "element_id", "component"]},
                 "value": {"type": "string"}
             },
             "required": ["by", "value"]
@@ -57,6 +58,7 @@ ACTION_SCHEMA = {
     "required": ["action"],
     "additionalProperties": True
 }
+
 
 def _find_first_present(state_norm: Dict, candidates: List[Dict]) -> Optional[Dict]:
     from actuator import find_by_selector
@@ -84,6 +86,10 @@ def _need_open_app(obs: Dict, cfg: Dict) -> Optional[Dict]:
     comp = cfg.get("app_component")
     pkg = cfg.get("package")
     act = obs.get("package_activity") or ""
+    # Acceptable packages: primary + optional allowed_packages
+    allowed = [p for p in [pkg] if p] + list(cfg.get("allowed_packages", []))
+    if any(p and p in act for p in allowed):
+        return None
     if comp and comp.split("/")[0] not in act:
         return {"action": "open_app", "target": {"by": "component", "value": comp}, "args": {}}
     if pkg and pkg not in act:
@@ -108,16 +114,21 @@ def plan_next_action(goal: str, obs: Dict, state_norm: Dict, cfg: Dict, history:
             m = _goal_regex(goal, hint["when_goal_regex"])
             if not m:
                 continue
+
         action = hint.get("action")
         target = None
 
-        # Find target on screen if specified
-        prefer = hint.get("prefer") or hint.get("target_prefer") or []
-        if prefer:
-            sel = _find_first_present(state_norm, prefer)
-            if sel:
-                target = sel
+        # Resolve target: static target wins, otherwise use first present from preferences
+        if hint.get("target"):
+            target = hint["target"]
+        else:
+            prefer = hint.get("prefer") or hint.get("target_prefer") or []
+            if prefer:
+                sel = _find_first_present(state_norm, prefer)
+                if sel:
+                    target = sel
 
+        # Build args from regex groups if configured
         args = {}
         if "args_from_regex_group" in hint and "when_goal_regex" in hint:
             m = _goal_regex(goal, hint["when_goal_regex"])
@@ -125,12 +136,78 @@ def plan_next_action(goal: str, obs: Dict, state_norm: Dict, cfg: Dict, history:
                 for k, grp_idx in hint["args_from_regex_group"].items():
                     args[k] = m.group(int(grp_idx))
 
-        # If action is 'type' but no explicit text and history shows last action was tap on input, skip args – caller should supply per config, but we try to use regex above.
+        # Merge any static args from the hint itself
+        if isinstance(hint.get("args"), dict):
+            for k, v in hint["args"].items():
+                if v is not None:
+                    args[k] = v
+
+        # Allow target to be constructed dynamically from regex group
+        if not target and "target_from_regex_group" in hint and "when_goal_regex" in hint:
+            m = _goal_regex(goal, hint["when_goal_regex"])
+            if m:
+                cfg_dyn = hint["target_from_regex_group"]
+                by = cfg_dyn.get("by", "text")
+                grp_idx = int(cfg_dyn.get("group", 1))
+                try:
+                    val = m.group(grp_idx)
+                    prefix = cfg_dyn.get("prefix", "")
+                    suffix = cfg_dyn.get("suffix", "")
+                    if prefix or suffix:
+                        val = f"{prefix}{val}{suffix}"
+                    if val:
+                        target = {"by": by, "value": val}
+                except Exception:
+                    pass
+
+        # Avoid redundant open_app if already in the package
+        if action == "open_app":
+            current = obs.get("package_activity") or ""
+            allowed = [p for p in [cfg.get("package")] if p] + list(cfg.get("allowed_packages", []))
+            if any(p and p in current for p in allowed):
+                continue
+
+        # For tap/open_app require a concrete target
+        if action in ("tap", "open_app") and not target:
+            continue
+
         act_obj = {"action": action}
         if target:
             act_obj["target"] = target
         if args:
             act_obj["args"] = args
+
+        # Avoid typing the same query repeatedly; if we already typed recently, skip this hint
+        if action == "type":
+            typed_same_recently = False
+            text_arg = (args.get("text") or "").strip().lower()
+            for h in list(history)[-3:][::-1]:  # look back a few steps
+                prev = (h.get("plan") or {})
+                if prev.get("action") == "type":
+                    prev_text = ((prev.get("args") or {}).get("text") or "").strip().lower()
+                    if not text_arg or text_arg == prev_text:
+                        typed_same_recently = True
+                        break
+            if typed_same_recently:
+                continue
+
+        # Heuristic: if goal is a search and a search edit field is present, skip further 'tap search' hints
+        if action == "tap" and _goal_contains_any(goal, ["search"]):
+            # Detect presence of a visible search edit field to avoid re-tapping search
+            has_search_field = False
+            for e in state_norm.get("elements", []):
+                rid = (e.get("resource_id") or "").lower()
+                clazz = (e.get("class") or "").lower()
+                # Consider any EditText as a candidate (search UIs usually expose an EditText)
+                if ("edittext" in clazz) or ("search_src_text" in rid) or ("search_edit_text" in rid):
+                    has_search_field = True
+                    break
+            # Also skip retapping if we're in a Search activity already
+            cur = (obs.get("package_activity") or "").lower()
+            if "searchactivity" in cur or ".search" in cur:
+                has_search_field = True
+            if has_search_field:
+                continue
 
         try:
             return _validate_action(act_obj)
@@ -139,7 +216,10 @@ def plan_next_action(goal: str, obs: Dict, state_norm: Dict, cfg: Dict, history:
 
     # 3) Fallback: if not found and allowed, scroll to reveal
     if cfg.get("fallback_scroll_if_not_found", True):
-        return _validate_action({"action": "scroll", "args": {"direction": "down", "duration_ms": 400}})
+        scroll_args = {"direction": "down", "duration_ms": 500, "length_factor": 0.7}
+        if isinstance(cfg.get("fallback_scroll_args"), dict):
+            scroll_args.update(cfg["fallback_scroll_args"])
+        return _validate_action({"action": "scroll", "args": scroll_args})
 
     # 4) As a last resort, wait a bit
     return _validate_action({"action": "wait", "args": {"duration_ms": 500}})

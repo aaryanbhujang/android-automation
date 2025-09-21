@@ -1,0 +1,35 @@
+{
+  "app_component": "com.google.android.apps.messaging/.ui.ConversationListActivity",
+  "package": "com.google.android.apps.messaging",
+  "allowed_packages": [
+    "com.google.android.apps.messaging",
+    "com.android.messaging"
+  ],
+  "termination": {
+    "must_contain_text": "To",
+    "package": "com.google.android.apps.messaging"
+  },
+  "plan_hints": [
+    {
+      "when_goal_contains_any": ["open messages", "messages"],
+      "action": "open_app",
+      "target": { "by": "component", "value": "com.google.android.apps.messaging/.ui.ConversationListActivity" }
+    },
+    {
+      "when_goal_contains_any": ["start chat", "new chat", "compose", "start new conversation"],
+      "prefer": [
+        { "by": "content-desc", "value": "Start chat" },
+        { "by": "text", "value": "Start chat" },
+        { "by": "content-desc", "value": "Start new conversation" },
+        { "by": "text", "value": "Start new conversation" },
+        { "by": "resource-id", "value": "com.google.android.apps.messaging:id/start_new_conversation_button" },
+        { "by": "resource-id", "value": "com.google.android.apps.messaging:id/fab" },
+        { "by": "resource-id", "value": "com.android.messaging:id/start_new_conversation_button" },
+        { "by": "resource-id", "value": "com.android.messaging:id/fab" }
+      ],
+      "action": "tap"
+    }
+  ],
+  "fallback_scroll_if_not_found": true,
+  "fallback_scroll_args": { "direction": "down", "duration_ms": 600, "length_factor": 0.8 }
+}

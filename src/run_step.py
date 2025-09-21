@@ -21,10 +21,13 @@ def build_action_from_args(args, state_norm):
 
 def main():
     p = argparse.ArgumentParser(description="Day-1 ADB Observe->Act->Verify step")
-    p.add_argument("--action", required=True, choices=["tap","type","swipe","back","open_app"], help="atomic action to perform")
+    p.add_argument("--action", required=True, choices=["tap","type","swipe","back","open_app","scroll","wait"], help="atomic action to perform")
     p.add_argument("--by", choices=["resource-id","text","content-desc","element_id","bounds"], help="how to find target")
     p.add_argument("--value", help="value for selector (resource-id, exact text, element_id, or coords)")
     p.add_argument("--text", help="text to type (for type action)")
+    p.add_argument("--direction", choices=["down","up","left","right"], help="scroll direction (for scroll action)")
+    p.add_argument("--length", type=int, help="scroll length in pixels from screen center (for scroll action)")
+    p.add_argument("--duration_ms", type=int, help="duration in milliseconds for swipe/scroll/wait")
     p.add_argument("--verify_text", help="text expected after action (fuzzy match)")
     p.add_argument("--verify_activity", help="activity expected after action (package/.Activity)")
     args = p.parse_args()
@@ -37,6 +40,21 @@ def main():
         logger.log({"ts": int(time.time()*1000), "step":"observe_before", "obs": obs_before, "normalized_count": len(state_norm["elements"])})
         # If action refers to text or resource-id, attempt to resolve
         action = build_action_from_args(args, state_norm)
+        # Fill action args for special actions
+        if args.action == "scroll":
+            if args.direction:
+                action["args"]["direction"] = args.direction
+            if args.length is not None:
+                action["args"]["length"] = int(args.length)
+            if args.duration_ms is not None:
+                action["args"]["duration_ms"] = int(args.duration_ms)
+        if args.action == "wait":
+            if args.duration_ms is not None:
+                action["args"]["duration_ms"] = int(args.duration_ms)
+        if args.action == "swipe":
+            if args.duration_ms is not None:
+                action["args"]["duration_ms"] = int(args.duration_ms)
+
         # Execute action
         exec_report = exec_action(action, state_norm)
         logger.log({"ts": int(time.time()*1000), "step":"act", "action": action, "exec_report": exec_report, "state_before_snapshot": obs_before})

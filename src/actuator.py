@@ -1,6 +1,6 @@
 # actuator.py
 from typing import Dict, Tuple, Optional, List
-from adb_wrapper import input_tap, input_text, input_swipe, key_back, am_start
+from adb_wrapper import input_tap, input_text, input_swipe, key_back, am_start, input_keyevent
 from math import floor
 
 def centroid_from_element(element: Dict) -> Tuple[int, int]:
@@ -8,24 +8,51 @@ def centroid_from_element(element: Dict) -> Tuple[int, int]:
 
 def find_by_selector(state_norm: Dict, by: str, value: str) -> Optional[Dict]:
     elems = state_norm.get("elements", [])
+    def clickable_wrapper(inner_bounds):
+        for e in elems:
+            if e.get("clickable"):
+                b = e.get("bounds") or [0,0,0,0]
+                if b[0] <= inner_bounds[0] and b[1] <= inner_bounds[1] and b[2] >= inner_bounds[2] and b[3] >= inner_bounds[3]:
+                    return e
+        return None
     if by == "resource-id":
+        # prefer clickable exact match
+        for e in elems:
+            if e.get("resource_id") == value and e.get("clickable"):
+                return e
         for e in elems:
             if e.get("resource_id") == value:
                 return e
     if by == "element_id":
         return state_norm.get("by_id", {}).get(value)
     if by == "text":
-        # exact first, then contains
+        val = (value or "").strip()
+        # exact clickable, exact any, contains clickable, contains any
         for e in elems:
-            if (e.get("text") or "").strip() == (value or "").strip():
+            if (e.get("text") or "").strip() == val and e.get("clickable"):
                 return e
         for e in elems:
-            if value and value.strip().lower() in (e.get("text") or "").strip().lower():
-                return e
+            if (e.get("text") or "").strip() == val:
+                # bubble up to clickable wrapper if needed
+                w = clickable_wrapper(e.get("bounds") or [0,0,0,0])
+                return w or e
+        if val:
+            low = val.lower()
+            for e in elems:
+                if e.get("clickable") and low in (e.get("text") or "").strip().lower():
+                    return e
+            for e in elems:
+                if low in (e.get("text") or "").strip().lower():
+                    w = clickable_wrapper(e.get("bounds") or [0,0,0,0])
+                    return w or e
     if by == "content-desc":
         for e in elems:
-            if e.get("content_desc") == value:
+            if e.get("content_desc") == value and e.get("clickable"):
                 return e
+        for e in elems:
+            if e.get("content_desc") == value:
+                w = clickable_wrapper(e.get("bounds") or [0,0,0,0])
+                return w or e
     if by == "bounds":
         try:
             import ast
@@ -67,7 +94,7 @@ def exec_action(action: Dict, state_norm: Dict) -> Dict:
     """
     action:
       {
-        "action": "tap|type|swipe|back|scroll|open_app|wait",
+    "action": "tap|type|swipe|back|scroll|open_app|wait|keyevent",
         "target": {"by": "resource-id|text|content-desc|bounds|element_id", "value": "<...>"},
         "args": {"text": "...", "duration_ms": 300, "direction": "down|up|left|right"}
       }
@@ -80,7 +107,11 @@ def exec_action(action: Dict, state_norm: Dict) -> Dict:
     result = {"success": False, "adb_cmds": [], "note": ""}
 
     if act == "open_app":
-        comp = target.get("value")
+        comp = target.get("value") if target else None
+        if not comp:
+            result["note"] = "open_app missing target.value (component)"
+            result["adb_cmds"] = adb_cmds
+            return result
         ok, out = am_start(comp)
         adb_cmds.append(f"am start -n {comp}")
         result.update({"success": ok, "note": out, "adb_cmds": adb_cmds})
@@ -89,6 +120,16 @@ def exec_action(action: Dict, state_norm: Dict) -> Dict:
     if act == "back":
         ok, out = key_back()
         adb_cmds.append("input keyevent KEYCODE_BACK")
+        result.update({"success": ok, "note": out, "adb_cmds": adb_cmds})
+        return result
+
+    if act == "keyevent":
+        key = (args.get("key") or "").strip() if args else ""
+        if not key:
+            result.update({"success": False, "note": "keyevent requires args.key", "adb_cmds": adb_cmds})
+            return result
+        ok, out = input_keyevent(key)
+        adb_cmds.append(f"input keyevent {key}")
         result.update({"success": ok, "note": out, "adb_cmds": adb_cmds})
         return result
 
@@ -133,14 +174,21 @@ def exec_action(action: Dict, state_norm: Dict) -> Dict:
     if act == "scroll":
         # direction-based swipe from screen center
         cx, cy = _screen_center(state_norm)
-        length = int(args.get("length", max(cy, cx) // 2 or 400))
-        dur = int(args.get("duration_ms", 400))
+        # Support either absolute length (pixels) or relative length via length_factor
+        if "length" in args and args.get("length") is not None:
+            length = int(args.get("length"))
+        else:
+            factor = float(args.get("length_factor", 0.7))  # default ~70% of screen
+            length = max(200, int(factor * max(cy, cx)))
+        dur = int(args.get("duration_ms", 500))
         direction = (args.get("direction") or "down").lower()
         dx, dy = 0, 0
+        # Note: Swipe direction is opposite of scroll direction.
+        # To scroll content down, you swipe finger UP (negative dy).
         if direction == "down":
-            dx, dy = 0, length
+            dx, dy = 0, -length   # swipe up -> scroll down
         elif direction == "up":
-            dx, dy = 0, -length
+            dx, dy = 0, length    # swipe down -> scroll up
         elif direction == "left":
             dx, dy = -length, 0
         elif direction == "right":
