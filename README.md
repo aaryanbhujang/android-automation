@@ -46,6 +46,10 @@ python .\run_goal.py --goal "open settings and then after opening scroll down to
 python .\run_goal.py --goal "open messages and search Antonio"  --auto-config --max-steps 20 --gemini-model "gemini-1.5-flash" --gemini-api-key
 ```
 
+
+https://github.com/user-attachments/assets/73a376e0-3ab0-43cf-a891-3142c833fbb3
+
+
 ---
 
 ## Minimal CLI reference
