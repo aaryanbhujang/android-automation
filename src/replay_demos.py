@@ -1,68 +1,72 @@
-"""
-Run the three demos using run_goal (Gemini LLM) and close the app after each.
-This is NOT low-level ADB replay; it re-runs the scenarios end-to-end.
-
-Usage:
-  python src/replay_demos.py --gemini-model gemini-1.5-flash --gemini-api-key <KEY>
-"""
-from __future__ import annotations
-
-import argparse
 import subprocess
 import sys
-from pathlib import Path
+import shlex
+import time
+import json
+import os
 
-from typing import List
+# Replay three exact demo commands sequentially, closing the app after each.
 
-HERE = Path(__file__).resolve().parent
-
-SCENARIOS: List[str] = [
-    "open chrome and search for 'massive socks' and press enter",
-    "open settings and scroll down to find system and tap on it",
-    "open messages and search Antonio",
-]
+BASE_DIR = os.path.dirname(__file__)
 
 
-def run(cmd: list[str]) -> int:
-    print("$", " ".join(cmd))
-    return subprocess.call(cmd, cwd=str(HERE))
-
-
-def force_stop_current_app() -> None:
-    # Best-effort: ask observer for current package, then force-stop
+def run_cmd(cmd: str) -> int:
+    print("\n=== Running ===\n" + cmd + "\n================")
+    # On Windows PowerShell, use shell=True so the quoting stays intact
     try:
-        from observer import observe  # type: ignore
-        from adb_wrapper import run_adb_cmd  # type: ignore
-        obs = observe()
-        act = (obs.get("package_activity") or "")
-        pkg = act.split("/", 1)[0].strip() if act else ""
-        if pkg:
-            run_adb_cmd(["shell", "am", "force-stop", pkg])
+        p = subprocess.run(cmd, shell=True, cwd=BASE_DIR)
+        print(f"Exited with code: {p.returncode}")
+        return p.returncode
+    except Exception as e:
+        print(f"ERROR running command: {e}")
+        return 1
+
+
+def infer_app_from_goal(goal: str) -> str:
+    """Best-effort package inference using goal_router registry. Returns package or empty string."""
+    try:
+        sys.path.insert(0, BASE_DIR)
+        from goal_router import _infer_app, _base_config_for_app  # type: ignore
+        app = _infer_app(goal) or ""
+        if not app:
+            return ""
+        cfg = _base_config_for_app(app) or {}
+        return cfg.get("package") or ""
     except Exception:
-        pass
+        return ""
+
+
+def force_stop_package(pkg: str):
+    if not pkg:
+        return
+    print(f"Stopping package: {pkg}")
+    subprocess.run(f"adb shell am force-stop {pkg}", shell=True)
+    # Go HOME to reset UI
+    subprocess.run("adb shell input keyevent KEYCODE_HOME", shell=True)
+    time.sleep(0.5)
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--gemini-model", required=True)
-    ap.add_argument("--gemini-api-key", required=True)
-    ap.add_argument("--max-steps", type=int, default=20)
-    args = ap.parse_args()
+    # The three commands provided by the user, kept exactly as-is
+    cmds = [
+        "python .\\run_goal.py --goal \"open chrome and search for 'massive socks' and click on Go/or inupt [return] to make a request\" --auto-config --max-steps 20 --gemini-model \"gemini-1.5-flash\" --gemini-api-key \"\"",
+        " python .\\run_goal.py --goal \"open settings and scroll down to find system and tap on it\" --auto-config --max-steps 20 --gemini-model \"gemini-1.5-flash\" --gemini-api-key \"\" ",
+        "python .\\run_goal.py --goal \"open messages and search Antonio\"  --auto-config --max-steps 20 --gemini-model \"gemini-1.5-flash\" --gemini-api-key"
+    ]
+    goals = [
+        "open chrome and search for 'massive socks' and click on Go/or inupt [return] to make a request",
+        "open settings and scroll down to find system and tap on it",
+        "open messages and search Antonio",
+    ]
 
-    for goal in SCENARIOS:
-        rc = run([
-            sys.executable,
-            str(HERE / "run_goal.py"),
-            "--goal", goal,
-            "--auto-config",
-            "--max-steps", str(args.max_steps),
-            "--gemini-model", args.gemini_model,
-            "--gemini-api-key", args.gemini_api_key,
-        ])
-        if rc != 0:
-            print(f"WARN: run_goal exited with code {rc} for: {goal}")
-        # Close the app after each scenario
-        force_stop_current_app()
+    for cmd, goal in zip(cmds, goals):
+        code = run_cmd(cmd)
+        # Close the corresponding app regardless of success
+        pkg = infer_app_from_goal(goal)
+        force_stop_package(pkg)
+        # Small pause between demos
+        time.sleep(0.5)
+    print("\nAll demo commands executed.\n")
 
 
 if __name__ == "__main__":
