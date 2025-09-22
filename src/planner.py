@@ -105,8 +105,15 @@ def plan_next_action(goal: str, obs: Dict, state_norm: Dict, cfg: Dict, history:
     if act:
         return _validate_action(act)
 
-    # 2) Try explicit plan hints
-    for hint in cfg.get("plan_hints", []):
+    # 2) Try explicit plan hints (from config and/or app-specific registry)
+    hints: List[Dict] = []
+    if isinstance(cfg.get("plan_hints"), list):
+        hints.extend(cfg.get("plan_hints"))
+    # If config originated from app registry and carries plan_hints in meta, merge them
+    if isinstance(cfg.get("meta"), dict):
+        app = cfg["meta"].get("app")
+        # app-specific hints may already be merged by router; no-op if absent
+    for hint in hints:
         if "when_goal_contains_any" in hint:
             if not _goal_contains_any(goal, hint["when_goal_contains_any"]):
                 continue

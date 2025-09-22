@@ -60,6 +60,8 @@ def _base_config_for_app(app: str) -> Optional[Dict[str, Any]]:
     }
     if chosen.get("allowed_packages"):
         cfg["allowed_packages"] = chosen["allowed_packages"]
+    if chosen.get("plan_hints"):
+        cfg["plan_hints"] = chosen["plan_hints"]
     # Minimal default termination is presence of the package (updated later with goal term)
     cfg["termination"] = {"package": cfg.get("package")}
     return cfg
@@ -109,8 +111,16 @@ def synthesize_config_from_goal(goal: str) -> Optional[Dict[str, Any]]:
     if not base:
         # Minimal config to open app drawer from launcher and search for the app name
         # We try to extract a target app token from the goal (e.g., the word after 'open ')
-        m = re.search(r"open\s+([a-zA-Z0-9 ._-]+)", goal, re.IGNORECASE)
+        # Prefer a short token: stop at 'and'/'then' or punctuation
+        m = re.search(r"open\s+([a-zA-Z0-9 ._-]+?)(?:\s+(?:and|then)\b|\s*[,;]|$)", goal, re.IGNORECASE)
         target_name = (m.group(1).strip() if m else "").strip()
+        # If registry can infer a canonical app from the whole goal, prefer that as the search token
+        try:
+            canon = _infer_app(goal)
+        except Exception:
+            canon = None
+        if canon and canon not in (target_name or "").lower():
+            target_name = canon
         target_title = target_name.title() if target_name else ""
         # Base config focuses on leaving launcher state (not in any launcher package)
         cfg = {
@@ -140,7 +150,7 @@ def synthesize_config_from_goal(goal: str) -> Optional[Dict[str, Any]]:
                                 },
                                 # Small wait to let the keyboard appear
                                 {"action": "wait", "args": {"duration_ms": 200}},
-                                # Type the app name if we extracted one
+                # Type the app name if we extracted one
                                 *([{ "action": "type", "args": {"text": target_name} }] if target_name else []),
                                 # Tap an icon matching the label (try Title Case then original)
                                 *([

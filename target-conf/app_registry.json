@@ -2,7 +2,17 @@
   "settings": {
     "aliases": ["settings", "android settings"],
     "app_component": "com.android.settings/.Settings",
-    "package": "com.android.settings"
+    "package": "com.android.settings",
+    "plan_hints": [
+      {
+        "when_goal_contains_any": ["open", "settings"],
+        "prefer": [
+          {"by": "text", "value": "Settings"},
+          {"by": "content-desc", "value": "Settings"}
+        ],
+        "action": "tap"
+      }
+    ]
   },
   "messages": {
     "aliases": ["messages", "messaging", "sms", "text"],

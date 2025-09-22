@@ -120,6 +120,12 @@ class GeminiPlanner:
         cfg: Dict[str, Any],
         history: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        # Always ensure we're in the target app before any other assist (like scroll)
+        target_pkg = cfg.get("package") or ""
+        app_component = cfg.get("app_component") or ""
+        current_act = obs.get("package_activity") or ""
+        if target_pkg and (target_pkg not in current_act) and app_component:
+            return {"action": "open_app", "target": {"by": "component", "value": app_component}}
         # Lightweight deterministic assists for common intents (keeps behavior generic)
         def _goal_has_scroll() -> Optional[str]:
             g = (goal or "").lower()
@@ -216,8 +222,6 @@ class GeminiPlanner:
                 "args": {"text": term}
             }
         ui_text = _summarize_ui(obs, state_norm)
-        target_pkg = cfg.get("package") or ""
-        app_component = cfg.get("app_component") or ""
         prompt = (
             f"Goal: {goal}\n"
             f"Target package: {target_pkg}\n"

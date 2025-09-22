@@ -39,7 +39,7 @@ Tip: omit `--gemini-model` to use the deterministic rule‑based planner only.
 
 ```powershell
 python .\run_goal.py --goal "open chrome and search for 'massive socks' and click on Go/or inupt [return] to make a request" --auto-config --max-steps 20 --gemini-model "gemini-1.5-flash" --gemini-api-key ""
-python .\run_goal.py --goal "open settings and scroll down to find system and tap on it" --auto-config --max-steps 20 --gemini-model "gemini-1.5-flash" --gemini-api-key "" 
+python .\run_goal.py --goal "open settings and then after opening scroll down to find system and tap on it" --auto-config --max-steps 20 --gemini-model "gemini-1.5-flash" --gemini-api-key "" 
 python .\run_goal.py --goal "open messages and search Antonio"  --auto-config --max-steps 20 --gemini-model "gemini-1.5-flash" --gemini-api-key
 ```
 
@@ -81,3 +81,5 @@ Bullet overview
 - Cannot effectively locate modals and buttons to interact with
 - --llm-verify basically useless
 - Cannot perform complex operations
+- Fails verification on complex applications (Chrome search, for example)
+- Gotta give low level instructions
