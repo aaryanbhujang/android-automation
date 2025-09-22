@@ -1,0 +1,18 @@
+{
+  "app_component": "com.android.chrome/com.google.android.apps.chrome.Main",
+  "package": "com.android.chrome",
+  "allowed_packages": [
+    "com.android.chrome",
+    "com.google.android.apps.chrome"
+  ],
+  "termination": {
+    "package": "com.android.chrome",
+    "must_contain_text": "massive socks and input {RETURN}"
+  },
+  "meta": {
+    "generated_by": "goal_router.auto",
+    "ts": 1758544948598,
+    "goal": "open chrome and search for massive socks and input {RETURN}",
+    "app": "chrome"
+  }
+}

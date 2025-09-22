@@ -1,0 +1,17 @@
+{
+  "app_component": "com.android.dialer/.main.impl.MainActivity",
+  "package": "com.android.dialer",
+  "allowed_packages": [
+    "com.android.dialer",
+    "com.google.android.dialer"
+  ],
+  "termination": {
+    "package": "com.android.dialer"
+  },
+  "meta": {
+    "generated_by": "goal_router.auto",
+    "ts": 1758544216798,
+    "goal": "open phone and tap on the red button",
+    "app": "phone"
+  }
+}

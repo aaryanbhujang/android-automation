@@ -1,0 +1,71 @@
+{
+  "settings": {
+    "aliases": ["settings", "android settings"],
+    "app_component": "com.android.settings/.Settings",
+    "package": "com.android.settings"
+  },
+  "messages": {
+    "aliases": ["messages", "messaging", "sms", "text"],
+    "app_component": "com.google.android.apps.messaging/.ui.ConversationListActivity",
+    "package": "com.google.android.apps.messaging",
+    "allowed_packages": ["com.google.android.apps.messaging", "com.android.messaging"]
+  },
+  "chrome": {
+    "aliases": ["chrome", "google chrome", "browser"],
+    "app_component": "com.android.chrome/com.google.android.apps.chrome.Main",
+    "package": "com.android.chrome",
+    "allowed_packages": ["com.android.chrome", "com.google.android.apps.chrome"]
+  },
+  "camera": {
+    "aliases": ["camera"],
+    "app_component": "com.android.camera2/.CameraActivity",
+    "package": "com.android.camera2",
+    "allowed_packages": ["com.android.camera2", "com.google.android.GoogleCamera", "com.google.android.apps.cameralite"]
+  },
+  "calculator": {
+    "aliases": ["calculator", "calc"],
+    "app_component": "com.android.calculator2/.Calculator",
+    "package": "com.android.calculator2"
+  },
+  "clock": {
+    "aliases": ["clock", "alarm", "timer", "stopwatch"],
+    "app_component": "com.google.android.deskclock/.DeskClock",
+    "package": "com.google.android.deskclock",
+    "allowed_packages": ["com.google.android.deskclock", "com.android.deskclock"]
+  },
+  "contacts": {
+    "aliases": ["contacts", "people"],
+    "app_component": "com.android.contacts/.activities.PeopleActivity",
+    "package": "com.android.contacts",
+    "allowed_packages": ["com.android.contacts", "com.google.android.contacts"]
+  },
+  "phone": {
+    "aliases": ["phone", "dialer", "call"],
+    "app_component": "com.android.dialer/.main.impl.MainActivity",
+    "package": "com.android.dialer",
+    "allowed_packages": ["com.android.dialer", "com.google.android.dialer"]
+  },
+  "calendar": {
+    "aliases": ["calendar"],
+    "app_component": "com.google.android.calendar/com.android.calendar.AllInOneActivity",
+    "package": "com.google.android.calendar",
+    "allowed_packages": ["com.google.android.calendar", "com.android.calendar"]
+  },
+  "files": {
+    "aliases": ["files", "files app", "file manager", "downloads"],
+    "app_component": "com.android.documentsui/.LauncherActivity",
+    "package": "com.android.documentsui",
+    "allowed_packages": ["com.android.documentsui", "com.google.android.documentsui"]
+  },
+  "photos": {
+    "aliases": ["photos", "gallery"],
+    "app_component": "com.google.android.apps.photos/.home.HomeActivity",
+    "package": "com.google.android.apps.photos",
+    "allowed_packages": ["com.google.android.apps.photos", "com.android.gallery3d"]
+  },
+  "play store": {
+    "aliases": ["play store", "google play", "store"],
+    "app_component": "com.android.vending/.AssetBrowserActivity",
+    "package": "com.android.vending"
+  }
+}

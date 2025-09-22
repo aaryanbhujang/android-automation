@@ -1,0 +1,14 @@
+{
+  "app_component": "com.android.settings/.Settings",
+  "package": "com.android.settings",
+  "termination": {
+    "package": "com.android.settings",
+    "must_contain_text": "system and tap on it"
+  },
+  "meta": {
+    "generated_by": "goal_router.auto",
+    "ts": 1758544734851,
+    "goal": "open settings and scroll down to find system and tap on it",
+    "app": "settings"
+  }
+}
