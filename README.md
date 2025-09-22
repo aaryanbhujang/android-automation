@@ -63,13 +63,7 @@ Action JSON (returned by planners):
 
 ## Architecture (diagram placeholder)
 
-<!-- TODO: Insert Observe → Plan → Act → Verify diagram here -->
-
-Bullet overview
-- Observe: see `src/observer.py`, `src/normalizer.py`.
-- Plan: rule‑based (`src/planner.py`) or LLM (`src/gemini_llm_planner.py`, `src/remote_llm_planner.py`).
-- Act: `src/actuator.py` (tap/type/scroll/keyevent/open_app).
-- Verify: `src/verifier.py` (package/activity/text with retries).
+<img width="2958" height="1242" alt="diagram-export-22-9-2025-9_52_42-pm" src="https://github.com/user-attachments/assets/e60121be-119b-48e0-b322-c82d790dd196" />
 
 
 ---
