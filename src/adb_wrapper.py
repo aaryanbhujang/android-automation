@@ -68,9 +68,15 @@ def input_keyevent(key: str) -> Tuple[bool, str]:
     return rc == 0, err or out
 
 def am_start(component: str) -> Tuple[bool, str]:
-    # component: "com.example/.MainActivity" or "com.example/com.example.MainActivity"
-    rc, out, err = run_adb_cmd(["shell", "am", "start", "-n", component])
-    return rc == 0, err or out or out
+        """
+        Start an activity by component name.
+        component examples:
+            - "com.example/.MainActivity"
+            - "com.example/com.example.MainActivity"
+        Returns (success, message)
+        """
+        rc, out, err = run_adb_cmd(["shell", "am", "start", "-n", component])
+        return rc == 0, (err or out)
 
 def _escape_text_for_input(text: str) -> str:
     # Basic escaping for adb shell input text
@@ -88,6 +94,3 @@ def input_text(text: str) -> Tuple[bool, str]:
     safe = _escape_text_for_input(text)
     rc, out, err = run_adb_cmd(["shell", "input", "text", safe])
     return rc == 0, err or out
-def am_start(component: str) -> Tuple[bool, str]:
-    rc, out, err = run_adb_cmd(["shell", "am", "start", "-n", component])
-    return rc == 0, (err or out)

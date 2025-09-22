@@ -9,6 +9,18 @@ from normalizer import normalize
 from actuator import exec_action
 from verifier import verify_and_retry
 from planner import plan_next_action
+try:
+    from llm_planner import LlamaPlanner  # optional
+except Exception:
+    LlamaPlanner = None
+try:
+    from remote_llm_planner import RemoteLLMPlanner  # optional
+except Exception:
+    RemoteLLMPlanner = None
+try:
+    from gemini_llm_planner import GeminiPlanner  # optional
+except Exception:
+    GeminiPlanner = None
 from logger import RunLogger
 
 def goal_satisfied(obs: Dict, state_norm: Dict, termination: Dict) -> bool:
@@ -24,20 +36,97 @@ def goal_satisfied(obs: Dict, state_norm: Dict, termination: Dict) -> bool:
     if "package" in termination:
         act = obs.get("package_activity") or ""
         ok = ok and (termination["package"] in act)
+    # New: allow termination when leaving certain packages (e.g., launcher)
+    if "not_package_in" in termination:
+        act = obs.get("package_activity") or ""
+        bad = termination.get("not_package_in") or []
+        if isinstance(bad, str):
+            bad = [bad]
+        ok = ok and all((p not in act) for p in bad if p)
     return ok
+
+def _needs_enter_after_type(goal: str, history: List[Dict[str, Any]]) -> bool:
+    """
+    Heuristic: If the last action was a 'type' and the goal asks to press return/enter/go/search,
+    emit a KEYCODE_ENTER next. Avoid sending repeatedly if we've just sent one.
+    """
+    if not history:
+        return False
+    last_plan = (history[-1].get("plan") or {})
+    if last_plan.get("action") != "type":
+        return False
+    # Avoid duplicates if we recently sent ENTER/SEARCH
+    for h in list(history)[-3:][::-1]:
+        p = (h.get("plan") or {})
+        if p.get("action") == "keyevent":
+            key = ((p.get("args") or {}).get("key") or "").upper()
+            if key in ("ENTER", "SEARCH"):
+                return False
+    g = goal.lower()
+    triggers = [
+        "[return]", " press enter", " hit enter", " press return", " hit return",
+        " press go", " tap go", " hit go", " then go",
+        " press search", " hit search", " then search", " input [return]"
+    ]
+    return any(t in g for t in triggers)
 
 def main():
     ap = argparse.ArgumentParser(description="Day 2 NL-goal runner (Observe → Plan → Act → Verify loop)")
     ap.add_argument("--goal", required=True, help='Natural language goal, e.g. "Add a MacBook Pro to the cart and go to the payment page"')
-    ap.add_argument("--config", required=True, help="Target config JSON path")
+    ap.add_argument("--config", required=False, help="Target config JSON path (optional if using --auto-config)")
+    ap.add_argument("--auto-config", action="store_true", help="Infer a minimal config from the natural-language goal (uses built-ins)")
     ap.add_argument("--max-steps", type=int, default=20)
     ap.add_argument("--verify-retries", type=int, default=3)
+    ap.add_argument("--llama-model", type=str, default=None, help="Path to a local GGUF LLaMA/Mistral model; if set, use offline LLM planner")
+    ap.add_argument("--remote-llm-model", type=str, default=None, help="Hosted LLM model name (e.g., gpt-4o-mini, openrouter/...)")
+    ap.add_argument("--remote-llm-base-url", type=str, default=None, help="Custom OpenAI-compatible base URL (e.g., https://openrouter.ai/api/v1)")
+    ap.add_argument("--remote-llm-api-key", type=str, default=None, help="API key (fallback to OPENAI_API_KEY/OPENROUTER_API_KEY env vars)")
+    # Gemini hosted planner
+    ap.add_argument("--gemini-model", type=str, default=None, help="Gemini model (e.g., gemini-1.5-flash, gemini-1.5-pro)")
+    ap.add_argument("--gemini-api-key", type=str, default=None, help="Google API key (fallback to GOOGLE_API_KEY env var)")
+    ap.add_argument("--llm-verify", action="store_true", help="After each action, ask the LLM to judge if the goal appears satisfied (advisory); requires --gemini-model")
     args = ap.parse_args()
 
-    with open(args.config, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
+    if args.config:
+        with open(args.config, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    else:
+        from goal_router import synthesize_config_from_goal
+        cfg = synthesize_config_from_goal(args.goal)
+        if not cfg:
+            print("FAILURE: No config provided and auto-config could not infer app/termination from the goal.")
+            exit(2)
+        auto_path = cfg.pop("_auto_config_path", None)
+        if auto_path:
+            print(f"Auto-config saved to: {auto_path}")
 
     logger = RunLogger()
+    llm_planner = None
+    remote_planner = None
+    gemini_planner = None
+    # Planner selection priority: Gemini > Remote(OpenAI-compatible) > Local Llama > Rule-based
+    if args.gemini_model:
+        if GeminiPlanner is None:
+            print("FAILURE: google-generativeai not installed or gemini_llm_planner unavailable.")
+            exit(2)
+        gemini_planner = GeminiPlanner(model=args.gemini_model, api_key=args.gemini_api_key)
+    if args.llm_verify and not gemini_planner:
+        print("NOTE: --llm-verify currently supported only with --gemini-model; flag will be ignored.")
+        args.llm_verify = False
+    if args.llama_model:
+        if LlamaPlanner is None:
+            print("FAILURE: llama-cpp-python not installed or llm_planner unavailable.")
+            exit(2)
+        llm_planner = LlamaPlanner(model_path=args.llama_model)
+    if args.remote_llm_model:
+        if RemoteLLMPlanner is None:
+            print("FAILURE: openai client not installed or remote_llm_planner unavailable.")
+            exit(2)
+        remote_planner = RemoteLLMPlanner(
+            model=args.remote_llm_model,
+            base_url=args.remote_llm_base_url,
+            api_key=args.remote_llm_api_key,
+        )
     history: List[Dict[str, Any]] = []
     try:
         start_ts = int(time.time() * 1000)
@@ -53,9 +142,19 @@ def main():
                 print("SUCCESS: Goal satisfied.")
                 return
 
-            # Plan
+            # Plan (with optional enter-after-type nudge)
             try:
-                plan = plan_next_action(args.goal, obs, state_norm, cfg, history)
+                if _needs_enter_after_type(args.goal, history):
+                    plan = {"action": "keyevent", "args": {"key": "ENTER"}}
+                else:
+                    if gemini_planner:
+                        plan = gemini_planner.plan_next_action_gemini(args.goal, obs, state_norm, cfg, history)
+                    elif remote_planner:
+                        plan = remote_planner.plan_next_action_remote(args.goal, obs, state_norm, cfg, history)
+                    elif llm_planner:
+                        plan = llm_planner.plan_next_action_llm(args.goal, obs, state_norm, cfg, history)
+                    else:
+                        plan = plan_next_action(args.goal, obs, state_norm, cfg, history)
             except Exception as e:
                 logger.log({"ts": int(time.time() * 1000), "step": "plan_error", "error": str(e)})
                 print("FAILURE: Planner error:", str(e))
@@ -91,6 +190,18 @@ def main():
             logger.log({"ts": int(time.time() * 1000), "step": "verify", "verify_report": {"ok": verify_report["ok"], "attempts": verify_report["attempts"]}})
 
             history.append({"obs": obs, "plan": plan, "exec": exec_report, "verify": verify_report})
+            # Optional: LLM-based verification (advisory + potential early termination)
+            if args.llm_verify and gemini_planner:
+                # Re-observe after the action for the most up-to-date UI
+                post_obs = observe()
+                post_state = normalize(post_obs["raw_xml"])
+                llm_verdict = gemini_planner.verify_goal_gemini(args.goal, post_obs, post_state, cfg.get("termination", {}))
+                logger.log({"ts": int(time.time() * 1000), "step": "llm_verify", "llm_verdict": llm_verdict})
+                # If both LLM says ok and deterministic termination is satisfied on the fresh observation, end early
+                if llm_verdict.get("ok") and goal_satisfied(post_obs, post_state, cfg.get("termination", {})):
+                    logger.log({"ts": int(time.time() * 1000), "step": "done", "reason": "llm+termination satisfied", "goal": args.goal})
+                    print("SUCCESS: Goal satisfied (LLM + termination).")
+                    return
             # Small pacing
             time.sleep(0.25)
 

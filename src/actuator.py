@@ -2,6 +2,7 @@
 from typing import Dict, Tuple, Optional, List
 from adb_wrapper import input_tap, input_text, input_swipe, key_back, am_start, input_keyevent
 from math import floor
+from selector_resolver import resolve_selector
 
 def centroid_from_element(element: Dict) -> Tuple[int, int]:
     return tuple(element.get("center", [0, 0]))
@@ -63,6 +64,13 @@ def find_by_selector(state_norm: Dict, by: str, value: str) -> Optional[Dict]:
                         return e
         except Exception:
             pass
+    # Fallback: use resolver's fuzzy/contains logic
+    try:
+        cand = resolve_selector(state_norm, {"by": by, "value": value})
+        if cand:
+            return cand
+    except Exception:
+        pass
     return None
 
 def _resolve_tap_target(target: Dict, state_norm: Dict) -> Tuple[int, int]:
@@ -142,9 +150,25 @@ def exec_action(action: Dict, state_norm: Dict) -> Dict:
 
     if act == "tap":
         x, y = _resolve_tap_target(target, state_norm)
+        # Avoid tapping (0,0) when a target is specified but not found
+        if target and (x, y) == (0, 0):
+            result.update({
+                "success": False,
+                "note": f"tap target not found: by={target.get('by')} value={target.get('value')}",
+                "adb_cmds": adb_cmds
+            })
+            return result
+        # Attach resolved element metadata (best-effort)
+        resolved = None
+        try:
+            if target:
+                resolved = find_by_selector(state_norm, target.get("by"), target.get("value"))
+        except Exception:
+            resolved = None
         ok, out = input_tap(x, y)
         adb_cmds.append(f"input tap {x} {y}")
-        result.update({"success": ok, "note": out, "adb_cmds": adb_cmds})
+        extra = {"resolved": {k: resolved.get(k) for k in ("resource_id","text","content_desc","bounds","clickable")}} if resolved else {}
+        result.update({"success": ok, "note": out, "adb_cmds": adb_cmds, **extra})
         return result
 
     if act == "type":
@@ -172,8 +196,25 @@ def exec_action(action: Dict, state_norm: Dict) -> Dict:
         return result
 
     if act == "scroll":
-        # direction-based swipe from screen center
+        # direction-based swipe with configurable start position (default: center)
         cx, cy = _screen_center(state_norm)
+        # Derive screen bounds for edge-origin swipes
+        max_r = 0
+        max_b = 0
+        for e in state_norm.get("elements", []):
+            b = e.get("bounds") or [0, 0, 0, 0]
+            max_r = max(max_r, b[2])
+            max_b = max(max_b, b[3])
+        start_pos = (args.get("start_pos") or "center").lower()
+        x_start, y_start = cx, cy
+        if start_pos == "bottom":
+            x_start, y_start = cx, int(max_b * 0.85)
+        elif start_pos == "top":
+            x_start, y_start = cx, int(max_b * 0.15)
+        elif start_pos == "left":
+            x_start, y_start = int(max_r * 0.15), cy
+        elif start_pos == "right":
+            x_start, y_start = int(max_r * 0.85), cy
         # Support either absolute length (pixels) or relative length via length_factor
         if "length" in args and args.get("length") is not None:
             length = int(args.get("length"))
@@ -193,7 +234,7 @@ def exec_action(action: Dict, state_norm: Dict) -> Dict:
             dx, dy = -length, 0
         elif direction == "right":
             dx, dy = length, 0
-        x1, y1, x2, y2 = cx, cy, cx + dx, cy + dy
+        x1, y1, x2, y2 = x_start, y_start, x_start + dx, y_start + dy
         ok, out = input_swipe(x1, y1, x2, y2, dur)
         adb_cmds.append(f"input swipe {x1} {y1} {x2} {y2} {dur}")
         result.update({"success": ok, "note": out, "adb_cmds": adb_cmds})
