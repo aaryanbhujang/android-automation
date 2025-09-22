@@ -2,6 +2,9 @@
 
 ADB-driven Android agent that takes a natural-language goal and executes it on an emulator/device. It observes the UI (UiAutomator XML + screenshot), plans one action (rule-based or LLM), acts via ADB, and verifies with explicit checks.
 
+## What I did different (I think)
+I made it to generate an auto config file for the target app on the fly
+
 ## TL;DR
 - Observe: dump XML + screenshot; parse elements.
 - Plan: pick one atomic JSON action (tap/type/scroll/open_app/etc.).
