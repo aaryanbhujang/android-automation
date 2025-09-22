@@ -1,4 +1,13 @@
-# observer.py
+"""
+observer.py
+
+Collect a single observation from the device:
+- UiAutomator XML dump pulled to ./state/window_dump_<ts>.xml
+- Screenshot saved to ./screenshots/screen_<ts>.png (best-effort)
+- Current focused activity/package
+
+Returns a small dict consumed by normalizer and planners.
+"""
 import os
 import time
 from typing import Dict, Any
@@ -14,6 +23,7 @@ def timestamp_ms() -> int:
     return int(time.time() * 1000)
 
 def observe() -> Dict[str, Any]:
+    """Perform UiAutomator dump + screenshot; return file paths and activity."""
     ts = timestamp_ms()
     xml_remote = "/sdcard/window_dump.xml"
     ok, info = uiautomator_dump(xml_remote)

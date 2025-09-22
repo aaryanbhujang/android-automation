@@ -1,13 +1,35 @@
-# actuator.py
+"""
+actuator.py
+
+Translate a validated action JSON (from planners) into concrete ADB inputs.
+This module contains only side-effecting primitives; it does not perform any
+planning or verification. Keep changes minimal to avoid unintended behavior changes.
+
+Contract
+- Inputs: action: { action: string, target?: {by, value}, args?: object }, state_norm: normalized UI
+- Output: dict { success: bool, note: str, adb_cmds: [str], ... }
+- Error modes: returns success=False with a human-readable note (never raises for normal flow)
+
+Edge cases handled
+- Avoids (0,0) taps when a target selector is provided but not resolved
+- Tap-before-type when a target is supplied to focus the field
+- Scroll direction maps to inverse swipe dy (human expectation vs touch physics)
+"""
 from typing import Dict, Tuple, Optional, List
 from adb_wrapper import input_tap, input_text, input_swipe, key_back, am_start, input_keyevent
 from math import floor
 from selector_resolver import resolve_selector
 
 def centroid_from_element(element: Dict) -> Tuple[int, int]:
+    """Return the screen coordinates (x,y) of an element center as integers."""
     return tuple(element.get("center", [0, 0]))
 
 def find_by_selector(state_norm: Dict, by: str, value: str) -> Optional[Dict]:
+    """Best-effort element resolver with a preference for clickable containers.
+
+    Strategy: exact match on the requested attribute, prefer clickable; then contains; then
+    wrap inside the nearest clickable ancestor. Finally, fall back to fuzzy resolver.
+    """
     elems = state_norm.get("elements", [])
     def clickable_wrapper(inner_bounds):
         for e in elems:
@@ -74,6 +96,10 @@ def find_by_selector(state_norm: Dict, by: str, value: str) -> Optional[Dict]:
     return None
 
 def _resolve_tap_target(target: Dict, state_norm: Dict) -> Tuple[int, int]:
+    """Resolve a tap target to screen coordinates; allow raw "x,y" fallback.
+
+    Returns (0,0) if no target is supplied or resolution fails (caller guards).
+    """
     if target:
         elem = find_by_selector(state_norm, target.get("by"), target.get("value"))
         if elem:
@@ -89,7 +115,7 @@ def _resolve_tap_target(target: Dict, state_norm: Dict) -> Tuple[int, int]:
     return 0, 0
 
 def _screen_center(state_norm: Dict) -> Tuple[int, int]:
-    # UiAutomator dump doesn't provide screen size; approximate from max bounds
+    """Approximate screen center from max observed element bounds."""
     max_r = 0
     max_b = 0
     for e in state_norm.get("elements", []):

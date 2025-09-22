@@ -1,4 +1,9 @@
 # normalizer.py
+# normalizer.py
+"""
+Parse UiAutomator XML into a compact, consistent structure with element bounds,
+text, ids, and a stable element_id hash. This decouples planners from raw XML.
+"""
 import hashlib
 import re
 from typing import Dict, List, Any

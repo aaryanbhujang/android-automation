@@ -1,4 +1,26 @@
-# run_goal.py
+"""
+run_goal.py
+
+End-to-end NL goal runner implementing Observe → Plan → Act → Verify.
+
+Flow summary
+1) Observe: dump UI XML + screenshot
+2) Plan: choose ONE atomic action (rule-based or LLM planners)
+3) Act: execute via ADB primitives
+4) Verify: re-observe and assert expectations with retries/backoff
+
+Termination
+- Uses cfg["termination"] assertions (package/activity/text) as the source of truth.
+- Optional: --llm-verify asks Gemini to judge goal satisfaction, but success is
+    only declared when BOTH LLM verdict ok and deterministic termination hold on a
+    fresh observation.
+
+Exit codes
+2: config/router/planner unavailability
+3: planner error
+4: action execution failure
+5: max steps exceeded without termination
+"""
 import argparse
 import json
 import time
@@ -24,6 +46,7 @@ except Exception:
 from logger import RunLogger
 
 def goal_satisfied(obs: Dict, state_norm: Dict, termination: Dict) -> bool:
+    """Deterministic termination evaluator used as the source of truth."""
     ok = True
     if not termination:
         return False
