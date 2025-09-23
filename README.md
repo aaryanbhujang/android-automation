@@ -83,5 +83,4 @@ Action JSON (returned by planners):
 - --llm-verify basically useless
 - Cannot perform complex operations
 - Fails verification on complex applications (Chrome search, for example)
-- Gotta give low level instructions
-- Couldn't make it work on locally run cheap model.
+- Couldn't make it work on locally run cheap model. 
